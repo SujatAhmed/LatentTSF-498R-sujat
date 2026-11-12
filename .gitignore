@@ -189,3 +189,5 @@ embeddings_good_base/*
 # embeddings_tsne_results/*
 
 logs/*
+# Latent residual series (my_residual.py)
+residuals/

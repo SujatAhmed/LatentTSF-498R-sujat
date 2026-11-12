@@ -99,6 +99,38 @@ bash run_ae.sh
 
 The default trains the ETTh1 AE. To train a different one (or all 9 at once), edit the `datasets` variable at the top of `run_ae.sh` — per-dataset `d_model / d_ff / learning_rate / batch_size / des` are already wired in and match the checkpoint table below.
 
+### 4. Latent residual series (498R-kdd style)
+
+After training a forecaster with `run_train.sh`, build the residual series of its latent predictions the way 498R-kdd does it (window predictions → overlap average per time index → merge train/vali/test and subtract the ground truth):
+
+$$
+\mathcal{R} = \hat{Z}_Y - Z_Y = f_\theta\big(\mathcal{E}(X)\big) - \mathcal{E}(Y)
+$$
+
+i.e. prediction minus ground truth, using the frozen encoder $\mathcal{E}$ (`--autoencoder_path`) and the trained forecaster checkpoint. Set the same `dataset` / `model` / `pred_len` at the top of `run_residual.sh`, then:
+
+```bash
+bash run_residual.sh
+```
+
+`my_residual.py` takes exactly the `my_train.py` flags (so it finds the same `./checkpoints/<setting>/checkpoint.pth`) and runs every train / val / test window in order with stride 1, whatever `--step` was used for training. Outputs go to `./residuals/<model_id>/`:
+
+| File | Content |
+| --- | --- |
+| `{train,val,test}_pred_<P>.npy`, `{train,val,test}_true_<P>.npy` | per-window $\hat{Z}_Y$ / $Z_Y$, shape (windows, P, D); skip with `--save_window_npy 0` |
+| `{train,vali,test}_predictions.csv` | overlap-averaged $\hat{Z}_Y$, one row per time index |
+| `<name>_merged_predictions.csv` | train + vali + test predictions |
+| `<name>_latent_ground_truth.csv` | `date` + $Z_Y = \mathcal{E}(Y)$ on the same rows |
+| `<name>.csv` | `date` + residual $\mathcal{R}$, columns `z0 … z{D-1}` |
+| `<name>_info.json` | setting, checkpoints, row ranges, check results |
+
+`<name>` defaults to `<model_id>_residual` (`--residual_name`). Notes:
+
+- The series covers rows `[seq_len, end)` of the original data (ETTh: `[720, 14400)`); the per-split ranges are in `<name>_info.json`. A model trained on `<name>.csv` therefore has its split borders shifted by `seq_len` relative to the original data.
+- To load `<name>.csv` with the standard loaders use `--data custom --target z{D-1} --enc_in D`, where D is the AE `d_model`.
+- The encoder must be frozen during training (`--freeze_encoder`, the paper recipe): `my_train.py` does not save encoder weights. Solar and PEMS are not supported (no `date` column).
+- Built-in checks: the splits are contiguous, $Z_Y$ matches the point-wise encoding of the series (MLP AE), and the decoded test MSE/MAE is printed; it equals `my_train.py`'s test metrics when training used `--step 1`.
+
 ## Pretrained AE Checkpoints
 
 The `./checkpoints/` directory ships with the 9 pretrained MLP autoencoders used in the paper. All AEs are trained with `seq_len=24`, `ae_type=MLP`, `ae_loss=MAE`, `lradj=0`.
@@ -126,9 +158,11 @@ LatentTSF/
 ├── my_temporal_AE.py       # Temporal AE (seq_len dimension)
 ├── my_MAE.py               # Masked autoencoder (optional encoder type)
 ├── my_utils.py             # Args, valid/test loops, CSV logging
+├── my_residual.py          # Latent residual series of a trained forecaster (498R-kdd style)
 ├── RevIN.py                # RevIN normalization
 ├── run_train.sh            # Single-example training (one dataset × model × horizon)
 ├── run_train_all.sh        # Full sweep training (lists of datasets × models × horizons)
+├── run_residual.sh         # Residual series for the run_train.sh example (same settings)
 ├── run_ae.sh               # Train AE from scratch (defaults = ETTh1 paper config)
 ├── run.py                  # Standard TSLib entry point (baselines, etc.)
 ├── download_datasets.py    # Fetch benchmarks from HuggingFace
